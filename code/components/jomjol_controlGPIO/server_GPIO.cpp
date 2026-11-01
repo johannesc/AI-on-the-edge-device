@@ -6,11 +6,14 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
+#include "driver/ledc.h"
+#include "esp_timer.h"
 
 #include "esp_log.h"
 
 #include <sys/stat.h>
 #include <vector>
+#include <algorithm>
 
 #include "../../include/defines.h"
 
@@ -37,11 +40,19 @@ GpioPin::GpioPin(gpio_num_t gpio, const char* name, gpio_pin_mode_t mode, gpio_i
     _mode = mode;
     _interruptType = interruptType;    
     _mqttTopic = mqttTopic;
+
+    if (_mode == GPIO_PIN_MODE_SERVO) {
+        _servoMutex = xSemaphoreCreateMutex();
+    }
 }
 
 GpioPin::~GpioPin()
 {
     ESP_LOGD(TAG,"reset GPIO pin %d", _gpio);
+    if (_mode == GPIO_PIN_MODE_SERVO) {
+        ledc_stop(SERVO_LEDC_MODE, SERVO_LEDC_CHANNEL, 0);
+        vSemaphoreDelete(_servoMutex);
+    }
     if (_interruptType != GPIO_INTR_DISABLE) {
         //hook isr handler for specific gpio pin
         gpio_isr_handler_remove(_gpio);
@@ -93,6 +104,45 @@ void GpioPin::gpioInterrupt(int value) {
 
 void GpioPin::init()
 {
+    if (_mode == GPIO_PIN_MODE_SERVO) {
+        ESP_LOGI(TAG, "init servo on GPIO %d", _gpio);
+
+        ledc_timer_config_t ledc_timer = {};
+        ledc_timer.speed_mode = SERVO_LEDC_MODE;
+        ledc_timer.timer_num = SERVO_LEDC_TIMER;
+        ledc_timer.duty_resolution = SERVO_LEDC_DUTY_RES;
+        ledc_timer.freq_hz = SERVO_LEDC_FREQUENCY;
+        ledc_timer.clk_cfg = LEDC_AUTO_CLK;
+        ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+        ledc_channel_config_t ledc_channel = {};
+        ledc_channel.speed_mode = SERVO_LEDC_MODE;
+        ledc_channel.channel = SERVO_LEDC_CHANNEL;
+        ledc_channel.timer_sel = SERVO_LEDC_TIMER;
+        ledc_channel.intr_type = LEDC_INTR_DISABLE;
+        ledc_channel.gpio_num = _gpio;
+        ledc_channel.duty = 0; // No pulses until the first move
+        ledc_channel.hpoint = 0;
+        ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+
+        // Bring the servo to a known position
+        servoSetAngle(_servoRestAngle);
+        vTaskDelay(pdMS_TO_TICKS(SERVO_SETTLE_TIME_MS));
+        servoStop();
+    } else {
+        initGpio();
+    }
+
+#ifdef ENABLE_MQTT
+    if ((_mqttTopic.compare("") != 0) && ((_mode == GPIO_PIN_MODE_OUTPUT) || (_mode == GPIO_PIN_MODE_OUTPUT_PWM) || (_mode == GPIO_PIN_MODE_BUILT_IN_FLASH_LED) || (_mode == GPIO_PIN_MODE_SERVO))) {
+        std::function<bool(std::string, char*, int)> f = std::bind(&GpioPin::handleMQTT, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
+        MQTTregisterSubscribeFunction(_mqttTopic, f);
+    }
+#endif //ENABLE_MQTT
+}
+
+void GpioPin::initGpio()
+{
     gpio_config_t io_conf;
     //set interrupt
     io_conf.intr_type = _interruptType;
@@ -113,13 +163,93 @@ void GpioPin::init()
         ESP_LOGD(TAG, "GpioPin::init add isr handler for GPIO %d", _gpio);
         gpio_isr_handler_add(_gpio, gpio_isr_handler, (void*)&_gpio);
     }
+}
 
-#ifdef ENABLE_MQTT
-    if ((_mqttTopic.compare("") != 0) && ((_mode == GPIO_PIN_MODE_OUTPUT) || (_mode == GPIO_PIN_MODE_OUTPUT_PWM) || (_mode == GPIO_PIN_MODE_BUILT_IN_FLASH_LED))) {
-        std::function<bool(std::string, char*, int)> f = std::bind(&GpioPin::handleMQTT, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
-        MQTTregisterSubscribeFunction(_mqttTopic, f);
+void GpioPin::setServoParameter(int restAngle, int pressAngle, int pressDuration, int waitAfterPress, int displayOnTime)
+{
+    _servoDisplayOnTime = displayOnTime;
+    _servoRestAngle = restAngle;
+    _servoPressAngle = pressAngle;
+    _servoPressDuration = pressDuration;
+    _servoWaitAfterPress = waitAfterPress;
+}
+
+void GpioPin::servoSetAngle(int angle)
+{
+    angle = std::min(std::max(angle, 0), 180);
+    uint32_t pulseUs = SERVO_PULSE_MIN_US + ((SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US) * angle) / 180;
+    uint32_t duty = (pulseUs * (1 << SERVO_LEDC_DUTY_RES)) / (1000000 / SERVO_LEDC_FREQUENCY);
+
+    ESP_LOGD(TAG, "servo GPIO %d: angle %d, pulse %ldus, duty %ld", _gpio, angle, (long)pulseUs, (long)duty);
+    ESP_ERROR_CHECK(ledc_set_duty(SERVO_LEDC_MODE, SERVO_LEDC_CHANNEL, duty));
+    ESP_ERROR_CHECK(ledc_update_duty(SERVO_LEDC_MODE, SERVO_LEDC_CHANNEL));
+}
+
+// Stop sending pulses: the servo stops holding its position, which avoids jitter and saves power
+void GpioPin::servoStop()
+{
+    ESP_ERROR_CHECK(ledc_set_duty(SERVO_LEDC_MODE, SERVO_LEDC_CHANNEL, 0));
+    ESP_ERROR_CHECK(ledc_update_duty(SERVO_LEDC_MODE, SERVO_LEDC_CHANNEL));
+}
+
+// Blocking: press, release and wait until the display of the meter is on.
+// Unless forced, the press is skipped while the display is expected to be still on from the last press,
+// because on many meters another press switches to a different screen.
+void GpioPin::servoPress(bool force)
+{
+    if (_mode != GPIO_PIN_MODE_SERVO) {
+        return;
     }
-#endif //ENABLE_MQTT
+
+    // The flow and a manual trigger (HTTP / MQTT) can run at the same time. Do not press twice
+    // (that could switch the display off again), instead wait until the running press is done.
+    if (xSemaphoreTake(_servoMutex, 0) != pdTRUE) {
+        ESP_LOGD(TAG, "servo GPIO %d: press already in progress, waiting", _gpio);
+        xSemaphoreTake(_servoMutex, portMAX_DELAY);
+        xSemaphoreGive(_servoMutex);
+        return;
+    }
+
+    if (_servoLastRelease >= 0) {
+        int64_t elapsedMs = (esp_timer_get_time() - _servoLastRelease) / 1000;
+        int64_t onTimeMs = (int64_t)_servoDisplayOnTime * 1000;
+
+        if (!force && (_servoDisplayOnTime > 0)) {
+            if (elapsedMs < onTimeMs - SERVO_DISPLAY_ON_MARGIN_MS) {
+                LogFile.WriteToFile(ESP_LOG_DEBUG, TAG, "Servo GPIO" + std::to_string((int)_gpio) + ": display still on, skip press");
+                xSemaphoreGive(_servoMutex);
+                return;
+            }
+            if (elapsedMs < onTimeMs + SERVO_DISPLAY_ON_MARGIN_MS) {
+                // Display is about to switch off: wait until it is surely off, a press now could switch the screen
+                LogFile.WriteToFile(ESP_LOG_DEBUG, TAG, "Servo GPIO" + std::to_string((int)_gpio) + ": wait until display is off");
+                vTaskDelay(pdMS_TO_TICKS(onTimeMs + SERVO_DISPLAY_ON_MARGIN_MS - elapsedMs));
+                elapsedMs = onTimeMs + SERVO_DISPLAY_ON_MARGIN_MS;
+            }
+        }
+
+        // Two presses in a short time may be detected as a double press
+        if (elapsedMs < SERVO_MIN_PRESS_GAP_MS) {
+            vTaskDelay(pdMS_TO_TICKS(SERVO_MIN_PRESS_GAP_MS - elapsedMs));
+        }
+    }
+
+    LogFile.WriteToFile(ESP_LOG_DEBUG, TAG, "Servo GPIO" + std::to_string((int)_gpio) + ": press button");
+
+    servoSetAngle(_servoPressAngle);
+    vTaskDelay(pdMS_TO_TICKS(_servoPressDuration));
+    servoSetAngle(_servoRestAngle);
+    _servoLastRelease = esp_timer_get_time();
+
+    // Always give the servo time to return before switching the signal off, even if the wait time is shorter
+    vTaskDelay(pdMS_TO_TICKS(SERVO_SETTLE_TIME_MS));
+    servoStop();
+
+    if (_servoWaitAfterPress > SERVO_SETTLE_TIME_MS) {
+        vTaskDelay(pdMS_TO_TICKS(_servoWaitAfterPress - SERVO_SETTLE_TIME_MS));
+    }
+
+    xSemaphoreGive(_servoMutex);
 }
 
 bool GpioPin::getValue(std::string* errorText)
@@ -135,7 +265,12 @@ void GpioPin::setValue(bool value, gpio_set_source setSource, std::string* error
 {
     ESP_LOGD(TAG, "GpioPin::setValue %d", value);
 
-    if ((_mode != GPIO_PIN_MODE_OUTPUT) && (_mode != GPIO_PIN_MODE_OUTPUT_PWM) && (_mode != GPIO_PIN_MODE_BUILT_IN_FLASH_LED)) {
+    if (_mode == GPIO_PIN_MODE_SERVO) {
+        // A servo has no static state: "true" triggers a button press, "false" is ignored
+        if (value) {
+            servoPress(true);
+        }
+    } else if ((_mode != GPIO_PIN_MODE_OUTPUT) && (_mode != GPIO_PIN_MODE_OUTPUT_PWM) && (_mode != GPIO_PIN_MODE_BUILT_IN_FLASH_LED)) {
         (*errorText) = "GPIO is not in output mode";
     } else {
         gpio_set_level(_gpio, value);
@@ -149,6 +284,10 @@ void GpioPin::setValue(bool value, gpio_set_source setSource, std::string* error
 }
 
 void GpioPin::publishState() {
+    if (_mode == GPIO_PIN_MODE_SERVO) {
+        return;
+    }
+
     int newState = gpio_get_level(_gpio);
     if (newState != currentState) {
         ESP_LOGD(TAG,"publish state of GPIO %d new state %d", _gpio, newState);
@@ -400,6 +539,26 @@ bool GpioHandler::readConfig()
 
             LEDColor = Rgb{_r, _g, _b};
         }
+        if ((toUpper(splitted[0]) == "SERVORESTANGLE") && (splitted.size() > 1))
+        {
+            ServoRestAngle = stoi(splitted[1]);
+        }
+        if ((toUpper(splitted[0]) == "SERVOPRESSANGLE") && (splitted.size() > 1))
+        {
+            ServoPressAngle = stoi(splitted[1]);
+        }
+        if ((toUpper(splitted[0]) == "SERVOPRESSDURATION") && (splitted.size() > 1))
+        {
+            ServoPressDuration = std::max(stoi(splitted[1]), 0);
+        }
+        if ((toUpper(splitted[0]) == "SERVOWAITAFTERPRESS") && (splitted.size() > 1))
+        {
+            ServoWaitAfterPress = std::max(stoi(splitted[1]), 0);
+        }
+        if ((toUpper(splitted[0]) == "SERVODISPLAYONTIME") && (splitted.size() > 1))
+        {
+            ServoDisplayOnTime = std::max(stoi(splitted[1]), 0);
+        }
         if (toUpper(splitted[0]) == "LEDTYPE")
         {
             if (splitted[1] == "WS2812")
@@ -411,6 +570,22 @@ bool GpioHandler::readConfig()
             if (splitted[1] == "WS2813")
                 LEDType = LED_WS2813;
         }
+    }
+
+    bool servoFound = false;
+    for(std::map<gpio_num_t, GpioPin*>::iterator it = gpioMap->begin(); it != gpioMap->end(); ) {
+        if (it->second->getMode() == GPIO_PIN_MODE_SERVO) {
+            if (servoFound) {
+                // Only one LEDC channel is reserved for servos
+                LogFile.WriteToFile(ESP_LOG_WARN, TAG, "Only one servo is supported, GPIO" + std::to_string((int)it->first) + " gets disabled");
+                delete it->second;
+                it = gpioMap->erase(it);
+                continue;
+            }
+            servoFound = true;
+            it->second->setServoParameter(ServoRestAngle, ServoPressAngle, ServoPressDuration, ServoWaitAfterPress, ServoDisplayOnTime);
+        }
+        ++it;
     }
 
     if (registerISR) {
@@ -508,7 +683,7 @@ esp_err_t GpioHandler::handleHttpRequest(httpd_req_t *req)
     }
 
     status = toUpper(status);
-    if ((status != "HIGH") && (status != "LOW") && (status != "TRUE") && (status != "FALSE") && (status != "0") && (status != "1") && (status != ""))
+    if ((status != "HIGH") && (status != "LOW") && (status != "TRUE") && (status != "FALSE") && (status != "0") && (status != "1") && (status != "PRESS") && (status != ""))
     {
         std::string zw = "Status not valid: " + status;
         httpd_resp_sendstr_chunk(req, zw.c_str());
@@ -548,7 +723,7 @@ esp_err_t GpioHandler::handleHttpRequest(httpd_req_t *req)
     else
     {
         std::string resp_str = "";
-        (*gpioMap)[gpio_num]->setValue((status == "HIGH") || (status == "TRUE") || (status == "1"), GPIO_SET_SOURCE_HTTP, &resp_str);
+        (*gpioMap)[gpio_num]->setValue((status == "HIGH") || (status == "TRUE") || (status == "1") || (status == "PRESS"), GPIO_SET_SOURCE_HTTP, &resp_str);
         if (resp_str == "") {
             resp_str = "GPIO" + std::to_string(gpionum) + " switched to " + status;
         }
@@ -621,6 +796,22 @@ void GpioHandler::flashLightEnable(bool value)
     }
 }
 
+bool GpioHandler::servoPress()
+{
+    if (gpioMap == NULL) {
+        return false;
+    }
+
+    for(std::map<gpio_num_t, GpioPin*>::iterator it = gpioMap->begin(); it != gpioMap->end(); ++it) {
+        if (it->second->getMode() == GPIO_PIN_MODE_SERVO) {
+            it->second->servoPress(false);
+            return true;
+        }
+    }
+
+    return false;
+}
+
 gpio_num_t GpioHandler::resolvePinNr(uint8_t pinNr) 
 {
     switch(pinNr)  {
@@ -652,6 +843,7 @@ gpio_pin_mode_t GpioHandler::resolvePinMode(std::string input)
     if( input == "output-pwm" ) return GPIO_PIN_MODE_OUTPUT_PWM;
     if( input == "external-flash-pwm" ) return GPIO_PIN_MODE_EXTERNAL_FLASH_PWM;
     if( input == "external-flash-ws281x" ) return GPIO_PIN_MODE_EXTERNAL_FLASH_WS281X;
+    if( input == "servo" ) return GPIO_PIN_MODE_SERVO;
 
     return GPIO_PIN_MODE_DISABLED;
 }

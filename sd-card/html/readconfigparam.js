@@ -252,12 +252,22 @@ function ParseConfig() {
     ParamAddValue(param, catname, "LEDType");
     ParamAddValue(param, catname, "LEDNumbers");
     ParamAddValue(param, catname, "LEDColor", 3);
+    ParamAddValue(param, catname, "ServoRestAngle");
+    ParamAddValue(param, catname, "ServoPressAngle");
+    ParamAddValue(param, catname, "ServoPressDuration");
+    ParamAddValue(param, catname, "ServoWaitAfterPress");
+    ParamAddValue(param, catname, "ServoDisplayOnTime");
      // Default Values, um abwärtskompatiblität zu gewährleisten
     param[catname]["LEDType"]["value1"] = "WS2812";
     param[catname]["LEDNumbers"]["value1"] = "2";
     param[catname]["LEDColor"]["value1"] = "50";
     param[catname]["LEDColor"]["value2"] = "50";
     param[catname]["LEDColor"]["value3"] = "50";
+    param[catname]["ServoRestAngle"]["value1"] = "0";
+    param[catname]["ServoPressAngle"]["value1"] = "90";
+    param[catname]["ServoPressDuration"]["value1"] = "500";
+    param[catname]["ServoWaitAfterPress"]["value1"] = "1000";
+    param[catname]["ServoDisplayOnTime"]["value1"] = "0";
 
     var catname = "AutoTimer";
     category[catname] = new Object();

@@ -328,6 +328,19 @@
 
 #endif //USE_PWM_LEDFLASH
 
+// ******* Servo definition (GPIO mode "servo", e.g. to press a button on the meter)
+    // LEDC timer 0 / channel 0 is used for camera XCLK, timer 1 / channel 1 for the flash LED
+    #define SERVO_LEDC_TIMER        LEDC_TIMER_2
+    #define SERVO_LEDC_MODE         LEDC_LOW_SPEED_MODE
+    #define SERVO_LEDC_CHANNEL      LEDC_CHANNEL_2
+    #define SERVO_LEDC_DUTY_RES     LEDC_TIMER_14_BIT
+    #define SERVO_LEDC_FREQUENCY    (50)    // Standard RC servo frame rate: 50 Hz -> 20 ms period
+    #define SERVO_PULSE_MIN_US      (500)   // Pulse width for 0 degree
+    #define SERVO_PULSE_MAX_US      (2500)  // Pulse width for 180 degree
+    #define SERVO_SETTLE_TIME_MS    (500)   // Time for the servo to reach its position before the signal gets switched off
+    #define SERVO_MIN_PRESS_GAP_MS  (1000)  // Minimum time between two presses, to not trigger a double press
+    #define SERVO_DISPLAY_ON_MARGIN_MS (5000) // Uncertainty of ServoDisplayOnTime, see GpioPin::servoPress()
+
 
 //softAP
 #ifdef ENABLE_SOFTAP

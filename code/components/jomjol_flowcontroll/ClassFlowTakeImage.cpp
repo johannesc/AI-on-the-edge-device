@@ -9,6 +9,7 @@
 
 #include "CImageBasis.h"
 #include "ClassControllCamera.h"
+#include "server_GPIO.h"
 #include "MainFlowControl.h"
 
 #include "esp_wifi.h"
@@ -22,6 +23,17 @@
 // #define WIFITURNOFF
 
 static const char *TAG = "TAKEIMAGE";
+
+// If a GPIO is configured as servo, press the button of the meter to switch its display on
+static void pressMeterButton(void)
+{
+    GpioHandler *gpioHandler = gpio_handler_get();
+
+    if ((gpioHandler != NULL) && gpioHandler->isEnabled())
+    {
+        gpioHandler->servoPress();
+    }
+}
 
 esp_err_t ClassFlowTakeImage::camera_capture(void)
 {
@@ -41,6 +53,7 @@ void ClassFlowTakeImage::takePictureWithFlash(int flash_duration)
 
     ESP_LOGD(TAG, "flash_duration: %d", flash_duration);
 
+    pressMeterButton();
     Camera.CaptureToBasisImage(rawImage, flash_duration);
 
     time(&TimeImageTaken);
@@ -589,6 +602,7 @@ bool ClassFlowTakeImage::doFlow(string zwtime)
 esp_err_t ClassFlowTakeImage::SendRawJPG(httpd_req_t *req)
 {
     int flash_duration = (int)(CCstatus.WaitBeforePicture * 1000);
+    pressMeterButton();
     time(&TimeImageTaken);
     localtime(&TimeImageTaken);
 
@@ -600,6 +614,7 @@ ImageData *ClassFlowTakeImage::SendRawImage(void)
     CImageBasis *zw = new CImageBasis("SendRawImage", rawImage);
     ImageData *id;
     int flash_duration = (int)(CCstatus.WaitBeforePicture * 1000);
+    pressMeterButton();
     Camera.CaptureToBasisImage(zw, flash_duration);
     time(&TimeImageTaken);
     localtime(&TimeImageTaken);
