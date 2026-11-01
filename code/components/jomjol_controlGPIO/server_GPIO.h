@@ -8,6 +8,8 @@
 #include <esp_http_server.h>
 #include <map>
 #include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 #include "SmartLeds.h"
 
@@ -21,6 +23,7 @@ typedef enum {
     GPIO_PIN_MODE_OUTPUT_PWM            = 0x6,
     GPIO_PIN_MODE_EXTERNAL_FLASH_PWM    = 0x7,
     GPIO_PIN_MODE_EXTERNAL_FLASH_WS281X = 0x8,
+    GPIO_PIN_MODE_SERVO                 = 0x9,
 } gpio_pin_mode_t;
 
 struct GpioResult {
@@ -50,14 +53,26 @@ public:
     gpio_int_type_t getInterruptType() { return _interruptType; }
     gpio_pin_mode_t getMode() { return _mode; }
     gpio_num_t getGPIO(){return _gpio;};
+    void setServoParameter(int restAngle, int pressAngle, int pressDuration, int waitAfterPress);
+    void servoPress();
 
 private:
+    void initGpio();
+    void servoSetAngle(int angle);
+    void servoStop();
+
     gpio_num_t _gpio;
     const char* _name;
     gpio_pin_mode_t _mode;
     gpio_int_type_t _interruptType;
     std::string _mqttTopic;
     int currentState = -1;
+
+    int _servoRestAngle = 0;
+    int _servoPressAngle = 90;
+    int _servoPressDuration = 500;      // ms
+    int _servoWaitAfterPress = 1000;    // ms
+    SemaphoreHandle_t _servoMutex = NULL;
 };
 
 esp_err_t callHandleHttpRequest(httpd_req_t *req);
@@ -76,6 +91,7 @@ public:
     void gpioInterrupt(GpioResult* gpioResult);  
     void flashLightEnable(bool value);
     bool isEnabled() { return _isEnabled; }
+    bool servoPress();
 #ifdef ENABLE_MQTT
     void handleMQTTconnect();
 #endif //ENABLE_MQTT
@@ -90,6 +106,11 @@ private:
     int LEDNumbers = 2;
     Rgb LEDColor = Rgb{ 255, 255, 255 };
     LedType LEDType = LED_WS2812;
+
+    int ServoRestAngle = 0;
+    int ServoPressAngle = 90;
+    int ServoPressDuration = 500;       // ms
+    int ServoWaitAfterPress = 1000;     // ms
 #ifdef __LEDGLOBAL
     SmartLed *leds_global = NULL;
 #endif

@@ -1760,6 +1760,7 @@
                     <!-- <option value="output-pwm">output-pwm</option> -->
                     <!-- <option value="external-flash-pwm">external-flash-pwm</option> -->				
                     <option value="external-flash-ws281x">external flash light ws281x controlled</option>
+                    <option value="servo">servo (press button before taking picture)</option>
                 </select>
             </td>
             <td>$TOOLTIP_GPIO_IO12</td>
@@ -1887,6 +1888,7 @@
                     <option value="input-pullup">input pullup</option>
                     <option value="input-pulldown">input pulldown</option>
                     <option value="output">output</option>
+                    <option value="servo">servo (press button before taking picture)</option>
                 </select>
             </td>
             <td>$TOOLTIP_GPIO_IO13</td>
@@ -1945,6 +1947,55 @@
             <td></td>
         </tr>
         <!------------- GPIO13 end ------------------>
+
+        <!------------- Servo (used by GPIO mode "servo") ------------------>
+        <tr class="GPIO_item expert">
+            <td class="indent1">
+                <span class="GPIO_item" id="GPIO_ServoRestAngle_text">Servo Rest Angle</span>
+            </td>
+            <td>
+                <input required type="number" id="GPIO_ServoRestAngle_value1" min="0" max="180" step="1"
+                    oninput="(!validity.rangeUnderflow||(value=0)) && (!validity.rangeOverflow||(value=180)) &&
+                        (!validity.stepMismatch||(value=parseInt(this.value)));"><span class="GPIO_item">°</span>
+            </td>
+            <td>$TOOLTIP_GPIO_ServoRestAngle</td>
+        </tr>
+
+        <tr class="GPIO_item expert">
+            <td class="indent1">
+                <span class="GPIO_item" id="GPIO_ServoPressAngle_text">Servo Press Angle</span>
+            </td>
+            <td>
+                <input required type="number" id="GPIO_ServoPressAngle_value1" min="0" max="180" step="1"
+                    oninput="(!validity.rangeUnderflow||(value=0)) && (!validity.rangeOverflow||(value=180)) &&
+                        (!validity.stepMismatch||(value=parseInt(this.value)));"><span class="GPIO_item">°</span>
+            </td>
+            <td>$TOOLTIP_GPIO_ServoPressAngle</td>
+        </tr>
+
+        <tr class="GPIO_item expert">
+            <td class="indent1">
+                <span class="GPIO_item" id="GPIO_ServoPressDuration_text">Servo Press Duration</span>
+            </td>
+            <td>
+                <input required type="number" id="GPIO_ServoPressDuration_value1" min="0" max="10000" step="1"
+                    oninput="(!validity.rangeUnderflow||(value=0)) && (!validity.rangeOverflow||(value=10000)) &&
+                        (!validity.stepMismatch||(value=parseInt(this.value)));"><span class="GPIO_item">ms</span>
+            </td>
+            <td>$TOOLTIP_GPIO_ServoPressDuration</td>
+        </tr>
+
+        <tr class="GPIO_item expert">
+            <td class="indent1">
+                <span class="GPIO_item" id="GPIO_ServoWaitAfterPress_text">Servo Wait After Press</span>
+            </td>
+            <td>
+                <input required type="number" id="GPIO_ServoWaitAfterPress_value1" min="0" max="60000" step="1"
+                    oninput="(!validity.rangeUnderflow||(value=0)) && (!validity.rangeOverflow||(value=60000)) &&
+                        (!validity.stepMismatch||(value=parseInt(this.value)));"><span class="GPIO_item">ms</span>
+            </td>
+            <td>$TOOLTIP_GPIO_ServoWaitAfterPress</td>
+        </tr>
 
         <!------------- Autotimer ------------------>
         <tr style="border-bottom: 2px solid lightgray;">
@@ -2400,6 +2451,10 @@ function UpdateInput() {
     WriteParameter(param, category, "GPIO", "LEDType", false);
     WriteParameter(param, category, "GPIO", "LEDNumbers", false);
     WriteParameter(param, category, "GPIO", "LEDColor", false);
+    WriteParameter(param, category, "GPIO", "ServoRestAngle", false);
+    WriteParameter(param, category, "GPIO", "ServoPressAngle", false);
+    WriteParameter(param, category, "GPIO", "ServoPressDuration", false);
+    WriteParameter(param, category, "GPIO", "ServoWaitAfterPress", false);
 
     //WriteParameter(param, category, "AutoTimer", "AutoStart", false);	
     WriteParameter(param, category, "AutoTimer", "Interval", false);
@@ -2568,6 +2623,10 @@ function ReadParameterAll() {
     ReadParameter(param, "GPIO", "LEDType", false);
     ReadParameter(param, "GPIO", "LEDNumbers", false);
     ReadParameter(param, "GPIO", "LEDColor", false);
+    ReadParameter(param, "GPIO", "ServoRestAngle", false);
+    ReadParameter(param, "GPIO", "ServoPressAngle", false);
+    ReadParameter(param, "GPIO", "ServoPressDuration", false);
+    ReadParameter(param, "GPIO", "ServoWaitAfterPress", false);
 	
     // Folgende Zeilen sind für Abwärtskompatibität < v9.0.0 notwendig (manchmal parameter auskommentiert)
     param["GPIO"]["LEDType"]["enabled"] = true;
@@ -2576,6 +2635,16 @@ function ReadParameterAll() {
     param["GPIO"]["LEDType"]["found"] = true;
     param["GPIO"]["LEDNumbers"]["found"] = true;
     param["GPIO"]["LEDColor"]["found"] = true;
+
+    // Servo parameters were added later, make sure they get written to older configs
+    param["GPIO"]["ServoRestAngle"]["enabled"] = true;
+    param["GPIO"]["ServoPressAngle"]["enabled"] = true;
+    param["GPIO"]["ServoPressDuration"]["enabled"] = true;
+    param["GPIO"]["ServoWaitAfterPress"]["enabled"] = true;
+    param["GPIO"]["ServoRestAngle"]["found"] = true;
+    param["GPIO"]["ServoPressAngle"]["found"] = true;
+    param["GPIO"]["ServoPressDuration"]["found"] = true;
+    param["GPIO"]["ServoWaitAfterPress"]["found"] = true;
 
     //ReadParameter(param, "AutoTimer", "AutoStart", false);
     ReadParameter(param, "AutoTimer", "Interval", false);

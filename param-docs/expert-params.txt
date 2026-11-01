@@ -45,3 +45,7 @@ CACert
 ValidateServerCert
 ClientCert
 ClientKey
+ServoRestAngle
+ServoPressAngle
+ServoPressDuration
+ServoWaitAfterPress
