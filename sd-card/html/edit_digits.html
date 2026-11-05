@@ -170,6 +170,12 @@
 	  The following settings are only used for easier setup, they are <b>not</b> persisted on the device:<br>
 	  <input type="checkbox" id="showall" name="showall" value="1" onclick="draw()" checked tabindex=10><label for="showall">Show all ROIs</label><br>
 	  <input type="checkbox" id="lockAspectRatio" name="lockAspectRatio" value="1" onclick="changelockAspectRatio()" checked tabindex=6><label for="lockAspectRatio"> Lock aspect ratio </label><br>
+	  <label for="guideMargin">Digit margin guide (inner box): </label>
+	  <select id="guideMargin" onchange="changeGuideMargin()" tabindex=11>
+	    <option value="0.2" selected>20 % (standard models)</option>
+	    <option value="0.1">10 %</option>
+	    <option value="0">none (models trained for tight ROIs)</option>
+	  </select><br>
 	  <input type="checkbox" id="lockSizes" name="lockSizes" value="1" onclick="changelockSizes()" checked tabindex=7><label for="lockSizes"> Synchronize y, Δx and Δy between ROIs</label><br>
 	  <input type="checkbox" id="lockSpaceEquidistant" name="lockSpaceEquidistant" value="1" onclick="changeLockSpaceEquidistant()" checked tabindex=8>
     <label for="lockSpaceEquidistant">Keep equidistance of <input type="number" name="space" id="space" maxlength="2" max=99 step=1 onchange="valuemanualchangedspace()" tabindex=9> between all ROIs</label><br>
@@ -336,6 +342,33 @@
         aktindex++;
         UpdateROIs();   
         valuemanualchanged();
+    }
+
+    // Inner box showing where the digit should be, depending on the free space the model expects around the digit
+    function drawMarginGuide(context, x0, y0, dx, dy) {
+        var m = parseFloat(document.getElementById("guideMargin").value);
+        if (m > 0) {
+            context.strokeRect(x0+dx*m, y0+dy*m, dx*(1-2*m), dy*(1-2*m));
+        }
+    }
+
+    // Default: the last choice in this browser, otherwise "none" for models trained for tight ROIs (name contains "-lcd")
+    function initGuideMargin() {
+        var guide = document.getElementById("guideMargin");
+        var saved = localStorage.getItem("guideMargin");
+        var model = (param["Digits"] && param["Digits"]["Model"]) ? param["Digits"]["Model"]["value1"] : "";
+
+        if (saved != null) {
+            guide.value = saved;
+        }
+        else if (model && model.includes("-lcd")) {
+            guide.value = "0";
+        }
+    }
+
+    function changeGuideMargin() {
+        localStorage.setItem("guideMargin", document.getElementById("guideMargin").value);
+        draw();
     }
 
     function changelockAspectRatio() {
@@ -579,6 +612,7 @@
         ParseConfig();
         param = getConfigParameters(); 
         cofcat = getConfigCategory();
+        initGuideMargin();
 		
         canvas.addEventListener('mousedown', mouseDown, false);
         canvas.addEventListener('mouseup', mouseUp, false);
@@ -790,7 +824,7 @@
                         context.moveTo(x0, y0+dy/2);
                         context.lineTo(x0+dx, y0+dy/2);
                         context.stroke();   
-                        context.strokeRect(x0+dx*0.2, y0+dy*0.2, dx*0.6, dy*0.6);
+                        drawMarginGuide(context, x0, y0, dx, dy);
                     }
                 }
             }
@@ -805,7 +839,7 @@
             context.strokeRect(x0, y0, dx, dy);
             drawTextBG(context, ROIInfo[aktindex]["name"], x0+dx/2, y0-11, 5);
             context.lineWidth = 1;
-            context.strokeRect(x0+dx*0.2, y0+dy*0.2, dx*0.6, dy*0.6);
+            drawMarginGuide(context, x0, y0, dx, dy);
 
             context.lineWidth = 2;
             context.beginPath();
