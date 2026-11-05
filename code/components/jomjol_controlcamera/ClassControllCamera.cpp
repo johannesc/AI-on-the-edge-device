@@ -1012,7 +1012,7 @@ void CCamera::LightOnOff(bool status)
     if ((gpioHandler != NULL) && (gpioHandler->isEnabled()))
     {
         ESP_LOGD(TAG, "Use gpioHandler to trigger flashlight");
-        gpioHandler->flashLightEnable(status);
+        gpioHandler->flashLightEnable(status, LedIntensity);
     }
     else
     {

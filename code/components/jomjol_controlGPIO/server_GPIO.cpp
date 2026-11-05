@@ -49,6 +49,12 @@ GpioPin::GpioPin(gpio_num_t gpio, const char* name, gpio_pin_mode_t mode, gpio_i
 GpioPin::~GpioPin()
 {
     ESP_LOGD(TAG,"reset GPIO pin %d", _gpio);
+    if (isPwmFlash()) {
+        // Keep the pin connected to the LEDC channel, the camera uses it for the flash when the GPIO handler is disabled
+        ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, 0);
+        ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
+        return;
+    }
     if (_mode == GPIO_PIN_MODE_SERVO) {
         ledc_stop(SERVO_LEDC_MODE, SERVO_LEDC_CHANNEL, 0);
         vSemaphoreDelete(_servoMutex);
@@ -58,6 +64,16 @@ GpioPin::~GpioPin()
         gpio_isr_handler_remove(_gpio);
     }
     gpio_reset_pin(_gpio);
+}
+
+// The built-in flash LED is dimmed by the LEDC channel set up by the camera, so it must not become a plain GPIO output
+bool GpioPin::isPwmFlash()
+{
+#ifdef USE_PWM_LEDFLASH
+    return (_mode == GPIO_PIN_MODE_BUILT_IN_FLASH_LED) && (_gpio == LEDC_OUTPUT_IO);
+#else
+    return false;
+#endif
 }
 
 static void IRAM_ATTR gpio_isr_handler(void* arg)
@@ -129,6 +145,19 @@ void GpioPin::init()
         servoSetAngle(_servoRestAngle);
         vTaskDelay(pdMS_TO_TICKS(SERVO_SETTLE_TIME_MS));
         servoStop();
+    } else if (isPwmFlash()) {
+#ifdef USE_PWM_LEDFLASH
+        ESP_LOGI(TAG, "use PWM for flash light on GPIO %d", _gpio);
+        ledc_channel_config_t ledc_channel = {};
+        ledc_channel.speed_mode = LEDC_MODE;
+        ledc_channel.channel = LEDC_CHANNEL;
+        ledc_channel.timer_sel = LEDC_TIMER;
+        ledc_channel.intr_type = LEDC_INTR_DISABLE;
+        ledc_channel.gpio_num = _gpio;
+        ledc_channel.duty = 0;
+        ledc_channel.hpoint = 0;
+        ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+#endif
     } else {
         initGpio();
     }
@@ -273,7 +302,15 @@ void GpioPin::setValue(bool value, gpio_set_source setSource, std::string* error
     } else if ((_mode != GPIO_PIN_MODE_OUTPUT) && (_mode != GPIO_PIN_MODE_OUTPUT_PWM) && (_mode != GPIO_PIN_MODE_BUILT_IN_FLASH_LED)) {
         (*errorText) = "GPIO is not in output mode";
     } else {
-        gpio_set_level(_gpio, value);
+        if (isPwmFlash()) {
+#ifdef USE_PWM_LEDFLASH
+            uint32_t duty = (_flashDuty < 0) ? ((1 << LEDC_DUTY_RES) - 1) : _flashDuty;
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, value ? duty : 0));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+#endif
+        } else {
+            gpio_set_level(_gpio, value);
+        }
 
 #ifdef ENABLE_MQTT
         if ((_mqttTopic.compare("") != 0) && (setSource != GPIO_SET_SOURCE_MQTT)) {
@@ -284,7 +321,7 @@ void GpioPin::setValue(bool value, gpio_set_source setSource, std::string* error
 }
 
 void GpioPin::publishState() {
-    if (_mode == GPIO_PIN_MODE_SERVO) {
+    if ((_mode == GPIO_PIN_MODE_SERVO) || isPwmFlash()) {
         return;
     }
 
@@ -734,7 +771,7 @@ esp_err_t GpioHandler::handleHttpRequest(httpd_req_t *req)
     return ESP_OK;    
 };
 
-void GpioHandler::flashLightEnable(bool value) 
+void GpioHandler::flashLightEnable(bool value, int duty)
 {
     ESP_LOGD(TAG, "GpioHandler::flashLightEnable %s", value ? "true" : "false");
 
@@ -744,6 +781,9 @@ void GpioHandler::flashLightEnable(bool value)
             if (it->second->getMode() == GPIO_PIN_MODE_BUILT_IN_FLASH_LED) //|| (it->second->getMode() == GPIO_PIN_MODE_EXTERNAL_FLASH_PWM) || (it->second->getMode() == GPIO_PIN_MODE_EXTERNAL_FLASH_WS281X))
             {
                 std::string resp_str = "";
+                if (duty >= 0) {
+                    it->second->setFlashDuty(duty);
+                }
                 it->second->setValue(value, GPIO_SET_SOURCE_INTERNAL, &resp_str);
 
                 if (resp_str == "") {

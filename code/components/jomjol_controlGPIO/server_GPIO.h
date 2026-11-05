@@ -53,10 +53,12 @@ public:
     gpio_int_type_t getInterruptType() { return _interruptType; }
     gpio_pin_mode_t getMode() { return _mode; }
     gpio_num_t getGPIO(){return _gpio;};
+    void setFlashDuty(int duty) { _flashDuty = duty; }
     void setServoParameter(int restAngle, int pressAngle, int pressDuration, int waitAfterPress, int displayOnTime);
     void servoPress(bool force);
 
 private:
+    bool isPwmFlash();
     void initGpio();
     void servoSetAngle(int angle);
     void servoStop();
@@ -67,6 +69,7 @@ private:
     gpio_int_type_t _interruptType;
     std::string _mqttTopic;
     int currentState = -1;
+    int _flashDuty = -1;                // -1 = full brightness
 
     int _servoRestAngle = 0;
     int _servoPressAngle = 90;
@@ -91,7 +94,7 @@ public:
     esp_err_t handleHttpRequest(httpd_req_t *req);
     void taskHandler();
     void gpioInterrupt(GpioResult* gpioResult);  
-    void flashLightEnable(bool value);
+    void flashLightEnable(bool value, int duty = -1);
     bool isEnabled() { return _isEnabled; }
     bool servoPress();
 #ifdef ENABLE_MQTT
